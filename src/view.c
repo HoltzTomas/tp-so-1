@@ -21,6 +21,19 @@ static const int NUM_BASE_COLORS = (int)(sizeof(BASE_COLORS) / sizeof(BASE_COLOR
 static volatile sig_atomic_t stop_requested = 0;
 static int colors_ok = 0;
 
+static inline short player_color_pair(unsigned int idx)
+{
+    if (!colors_ok)
+        return 0;
+    return (short)(1 + (idx % (unsigned int)MAX_PLAYERS));
+}
+
+static void handle_sigint(int sig)
+{
+    (void)sig;
+    stop_requested = 1;
+}
+
 typedef struct
 {
     unsigned long width;
@@ -37,15 +50,15 @@ typedef struct
     int *head_map;
 } ViewResources;
 
+/* Forward declarations */
 static bool parse_args(int argc, char **argv, ViewArgs *out_args);
-
 static bool init_resources(const ViewArgs *args, ViewResources *out_res);
-
 static void init_ncurses(void);
-
 static void run_view_loop(ViewResources *res);
-
 static void cleanup_resources(ViewResources *res);
+static void draw_box(int y, int x, int height, int width, const char *title);
+static void print_board(const GameState *state, const int *owner_map, const int *head_map);
+static void print_players(const GameState *state);
 
 int main(int argc, char *argv[]) {
 
@@ -146,7 +159,7 @@ static void init_ncurses(void) {
     cbreak();
     noecho();
     curs_set(0);
-    
+
     if (has_colors())
     {
         start_color();
@@ -224,4 +237,108 @@ static void cleanup_resources(ViewResources *res)
         close_shm(res->sync_shm);
     if (res->state_shm)
         close_shm(res->state_shm);
+}
+
+static void draw_box(int y, int x, int height, int width, const char *title)
+{
+    if (height < 2 || width < 2)
+        return;
+
+    mvaddch(y, x, ACS_ULCORNER);
+    mvhline(y, x + 1, ACS_HLINE, width - 2);
+    mvaddch(y, x + width - 1, ACS_URCORNER);
+
+    mvvline(y + 1, x, ACS_VLINE, height - 2);
+    mvvline(y + 1, x + width - 1, ACS_VLINE, height - 2);
+
+    mvaddch(y + height - 1, x, ACS_LLCORNER);
+    mvhline(y + height - 1, x + 1, ACS_HLINE, width - 2);
+    mvaddch(y + height - 1, x + width - 1, ACS_LRCORNER);
+
+    if (title && *title)
+    {
+        int len = (int)strlen(title);
+        int pos_x = x + 2;
+        if (pos_x + len < x + width - 1)
+        {
+            attron(A_BOLD);
+            mvprintw(y, pos_x, "%s", title);
+            attroff(A_BOLD);
+        }
+    }
+}
+
+static void print_board(const GameState *state, const int *owner_map, const int *head_map)
+{
+    int start_y = 1;
+    int cell_w = 5;
+    int inner_h = (int)state->height;
+    int inner_w = (int)state->width * cell_w;
+    char title[64];
+    snprintf(title, sizeof(title), "Board %ux%u", state->width, state->height);
+    draw_box(start_y, 0, inner_h + 2, inner_w + 2, title);
+
+    for (unsigned int row = 0; row < state->height; ++row)
+    {
+        for (unsigned int col = 0; col < state->width; ++col)
+        {
+            int idx = (int)(row * state->width + col);
+            int cell = state->board[idx];
+            int owner = owner_map ? owner_map[idx] : -1;
+            int head_owner = head_map ? head_map[idx] : -1;
+            short pair = owner >= 0 ? player_color_pair((unsigned int)owner) : 0;
+            int y = start_y + 1 + (int)row;
+            int x = 1 + (int)col * cell_w;
+
+            if (head_owner >= 0)
+            {
+                short head_pair = player_color_pair((unsigned int)head_owner);
+                if (head_pair)
+                    attron(COLOR_PAIR(head_pair) | A_BOLD);
+                mvprintw(y, x, "[%3d]", cell);
+                if (head_pair)
+                    attroff(COLOR_PAIR(head_pair) | A_BOLD);
+            }
+            else
+            {
+                if (pair)
+                    attron(COLOR_PAIR(pair));
+                mvprintw(y, x, " %3d ", cell);
+                if (pair)
+                    attroff(COLOR_PAIR(pair));
+            }
+        }
+    }
+}
+
+static void print_players(const GameState *state)
+{
+    int start_y = (int)state->height + 3;
+    int list_rows = (int)state->player_count;
+    int box_w = COLS - 2;
+    if (box_w < 10)
+        box_w = 10;
+    char title[64];
+    snprintf(title, sizeof(title), "Players: %u", (unsigned)state->player_count);
+    draw_box(start_y, 0, list_rows + 2, box_w, title);
+
+    for (unsigned int i = 0; i < state->player_count && i < MAX_PLAYERS; ++i)
+    {
+        const Player *p = &state->players[i];
+        short pair = player_color_pair(i);
+        if (pair)
+            attron(COLOR_PAIR(pair));
+        mvprintw(start_y + 1 + (int)i, 1,
+                 "Player %u - %s | Points %u | Pos %u,%u | Moves: %u ok, %u invalid | %s",
+                 i,
+                 p->name,
+                 p->score,
+                 (unsigned)p->x,
+                 (unsigned)p->y,
+                 p->valid_move_requests,
+                 p->invalid_move_requests,
+                 p->blocked ? "Blocked" : "Active");
+        if (pair)
+            attroff(COLOR_PAIR(pair));
+    }
 }
