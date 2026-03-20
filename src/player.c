@@ -9,6 +9,35 @@
 #include "game_state.h"
 #include "game_sync.h"
 #include "shmADT.h"
+
+static bool find_player_index_by_pid(const GameState *state, GameSync *sync,
+                                     pid_t pid, unsigned *out_index,
+                                     bool *out_finished_now)
+{
+    game_sync_reader_enter(sync);
+    unsigned player_count_snapshot = state->player_count;
+    if (player_count_snapshot > MAX_PLAYERS)
+        player_count_snapshot = MAX_PLAYERS;
+    for (unsigned i = 0; i < player_count_snapshot; i++)
+    {
+        if (state->players[i].pid == pid)
+        {
+            bool finished_snapshot = state->finished;
+            game_sync_reader_exit(sync);
+            if (out_index)
+                *out_index = i;
+            if (out_finished_now)
+                *out_finished_now = finished_snapshot;
+            return true;
+        }
+    }
+    bool finished_snapshot = state->finished;
+    game_sync_reader_exit(sync);
+    if (out_finished_now)
+        *out_finished_now = finished_snapshot;
+    return false;
+}
+
 typedef struct
 {
     unsigned long width;
@@ -42,7 +71,7 @@ int main(int argc, char *argv[]) {
     signal(SIGPIPE, SIG_IGN);//Ignoramos el SIGPIPE, ya que no queremos que el proceso se termine cuando el pipe se cierre.
 
     PlayerResources res;
-    if(!init_resources(&res, args))
+    if(!init_resources(&args, &res))
         return 1;
 
     run_player_loop(res.state, res.sync);
@@ -129,6 +158,8 @@ static void run_player_loop(GameState *state, GameSync *sync)
 
         unsigned short width_snapshot = 0, height_snapshot = 0;
         unsigned short x_snapshot = 0, y_snapshot = 0;
+        unsigned neighbor_ok_mask = 0;
+        int neighbor_vals[8] = {0};
 
         game_sync_reader_enter(sync);
         finished_now = state->finished;
