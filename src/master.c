@@ -327,7 +327,7 @@ static void init_game_state(const MasterArgs *args, GameResources *res)
     state->finished = false;
 
     for (unsigned int i = 0; i < state->width * state->height; i++)
-        state->board[i] = (char)(1 + (rand() % 9));
+        state->board[i] = (signed char)(1 + (rand() % 9));
 
     for (int i = 0; i < args->player_count; i++)
     {
@@ -356,7 +356,7 @@ static void init_game_state(const MasterArgs *args, GameResources *res)
 
         p->x = (unsigned short)tx;
         p->y = (unsigned short)ty;
-        state->board[BOARD_INDEX(state, p->x, p->y)] = (char)(-(i));
+        state->board[BOARD_INDEX(state, p->x, p->y)] = (signed char)(-(i));
     }
 }
 
@@ -402,7 +402,7 @@ static void process_player_move(int player_idx, int pipe_fd, const MasterArgs *a
             player->score += reward;
             player->x = (unsigned short)nx;
             player->y = (unsigned short)ny;
-            state->board[BOARD_INDEX(state, nx, ny)] = (char)(-(player_idx));
+            state->board[BOARD_INDEX(state, nx, ny)] = (signed char)(-(player_idx));
             player->valid_move_requests++;
         }
     }
