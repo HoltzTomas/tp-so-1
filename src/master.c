@@ -337,7 +337,7 @@ static void init_game_state(const MasterArgs *args, GameResources *res)
         p->valid_move_requests = 0;
         p->invalid_move_requests = 0;
         p->blocked = false;
-        snprintf(p->name, sizeof(p->name), "Player %d", i);
+        snprintf(p->name, sizeof(p->name), "Player %c", (char)('0' + i));
 
         double radius_x = ((double)state->width) / SPAWN_RADIUS_DIVISOR;
         double radius_y = ((double)state->height) / SPAWN_RADIUS_DIVISOR;
