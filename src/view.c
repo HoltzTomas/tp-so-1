@@ -54,7 +54,7 @@ typedef struct
 static bool parse_args(int argc, char **argv, ViewArgs *out_args);
 static bool init_resources(const ViewArgs *args, ViewResources *out_res);
 static void init_ncurses(void);
-static void run_view_loop(ViewResources *res);
+static void run_view_loop(const ViewArgs *args, ViewResources *res);
 static void cleanup_resources(ViewResources *res);
 static void draw_box(int y, int x, int height, int width, const char *title);
 static void print_board(const GameState *state, const int *owner_map, const int *head_map);
@@ -76,7 +76,7 @@ int main(int argc, char *argv[]) {
         return 1;
 
     init_ncurses();
-    run_view_loop(&res);
+    run_view_loop(&args, &res);
     cleanup_resources(&res);
     return 0;
 }
@@ -129,7 +129,7 @@ static bool init_resources(const ViewArgs *args, ViewResources *out_res) {
     }
     out_res->sync = (GameSync *)get_shm_pointer(out_res->sync_shm);
 
-    size_t cells = (size_t)out_res->state->width * (size_t)out_res->state->height;
+    size_t cells = (size_t)args->width * (size_t)args->height;
     out_res->owner_map = malloc(cells * sizeof(int));
     out_res->head_map = malloc(cells * sizeof(int));
 
@@ -172,12 +172,12 @@ static void init_ncurses(void) {
     }
 }
 
-static void run_view_loop(ViewResources *res) {
+static void run_view_loop(const ViewArgs *args, ViewResources *res) {
     GameState *state = res->state;
     GameSync *sync = res->sync;
     int *owner_map = res->owner_map;
     int *head_map = res->head_map;
-    size_t cells = (size_t)state->width * (size_t)state->height;
+    size_t cells = (size_t)args->width * (size_t)args->height;
 
     while (!stop_requested){
         if (sem_wait(&sync->view_update_ready) == -1)
