@@ -156,9 +156,53 @@ static bool any_player_can_move(const GameState *state)
     return false;
 }
 
-static bool launch_player(const MasterArgs *args, GameResources *res, int player_index, const char *width_str, const char *height_str)
+static void close_player_start_wfds(int *player_start_wfds, int player_count)
 {
-    int pipe_fds[2];
+    if (!player_start_wfds)
+        return;
+
+    for (int i = 0; i < player_count; i++)
+    {
+        if (player_start_wfds[i] >= 0)
+        {
+            close(player_start_wfds[i]);
+            player_start_wfds[i] = -1;
+        }
+    }
+}
+
+static void release_players_for_exec(int *player_start_wfds, int player_count)
+{
+    if (!player_start_wfds)
+        return;
+
+    for (int i = 0; i < player_count; i++)
+    {
+        if (player_start_wfds[i] < 0)
+            continue;
+
+        char token = 1;
+        ssize_t bytes_written;
+        do
+        {
+            bytes_written = write(player_start_wfds[i], &token, sizeof(token));
+        } while (bytes_written == -1 && errno == EINTR);
+
+        if (bytes_written != (ssize_t)sizeof(token))
+            perror("write to player start pipe failed");
+
+        close(player_start_wfds[i]);
+        player_start_wfds[i] = -1;
+    }
+}
+
+static bool launch_player(const MasterArgs *args, GameResources *res, int player_index,
+                          const char *width_str, const char *height_str,
+                          int *out_start_wfd)
+{
+    int pipe_fds[2] = {-1, -1};
+    int start_pipe_fds[2] = {-1, -1};
+
     if (pipe(pipe_fds) == -1)
     {
         perror("pipe creation failed");
@@ -168,16 +212,45 @@ static bool launch_player(const MasterArgs *args, GameResources *res, int player
     for (int i = 0; i < 2; i++)
         set_cloexec(pipe_fds[i]);
 
+    if (pipe(start_pipe_fds) == -1)
+    {
+        perror("player start pipe creation failed");
+        close(pipe_fds[R_END]);
+        close(pipe_fds[W_END]);
+        return false;
+    }
+
+    for (int i = 0; i < 2; i++)
+        set_cloexec(start_pipe_fds[i]);
+
     pid_t pid = fork();
     if (pid == -1)
     {
         perror("fork failed for player");
+        close(pipe_fds[R_END]);
+        close(pipe_fds[W_END]);
+        close(start_pipe_fds[R_END]);
+        close(start_pipe_fds[W_END]);
         return false;
     }
 
     if (pid == 0)
     {
         close(pipe_fds[R_END]);
+        close(start_pipe_fds[W_END]);
+
+        char token;
+        ssize_t bytes_read;
+        do
+        {
+            bytes_read = read(start_pipe_fds[R_END], &token, sizeof(token));
+        } while (bytes_read == -1 && errno == EINTR);
+
+        close(start_pipe_fds[R_END]);
+
+        if (bytes_read != (ssize_t)sizeof(token))
+            exit(EXIT_FAILURE);
+
         if (dup2(pipe_fds[W_END], STDOUT_FILENO) == -1)
         {
             perror("dup2 failed for player");
@@ -192,8 +265,13 @@ static bool launch_player(const MasterArgs *args, GameResources *res, int player
     }
 
     close(pipe_fds[W_END]);
+    close(start_pipe_fds[R_END]);
     res->player_pipes[player_index] = pipe_fds[R_END];
     res->player_pids[player_index] = pid;
+    if (out_start_wfd)
+        *out_start_wfd = start_pipe_fds[W_END];
+    else
+        close(start_pipe_fds[W_END]);
     return true;
 }
 
@@ -216,7 +294,7 @@ static bool launch_view(const MasterArgs *args, GameResources *res, const char *
     return true;
 }
 
-static bool launch_children(const MasterArgs *args, GameResources *res)
+static bool launch_children(const MasterArgs *args, GameResources *res, int *player_start_wfds)
 {
     char width_str[COORD_BUF_LEN];
     char height_str[COORD_BUF_LEN];
@@ -225,7 +303,7 @@ static bool launch_children(const MasterArgs *args, GameResources *res)
 
     for (int i = 0; i < args->player_count; i++)
     {
-        if (!launch_player(args, res, i, width_str, height_str))
+        if (!launch_player(args, res, i, width_str, height_str, &player_start_wfds[i]))
             return false;
     }
 
@@ -572,10 +650,11 @@ static void print_config(const MasterArgs *args)
         printf("  %s\n", args->player_paths[i]);
 }
 
-static void init_game(const MasterArgs *args, GameResources *resources)
+static void init_game(const MasterArgs *args, GameResources *resources, int *player_start_wfds)
 {
     init_game_state(args, resources);
     notify_view(args, resources);
+    release_players_for_exec(player_start_wfds, args->player_count);
 
     int current_player_turn = 0;
     fd_set read_fds;
@@ -709,17 +788,23 @@ int main(int argc, char **argv)
     print_config(&args);
 
     GameResources resources;
+    int player_start_wfds[MAX_PLAYERS];
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        player_start_wfds[i] = -1;
+
     if (!init_resources(&args, &resources))
         return EXIT_FAILURE;
 
-    if (!launch_children(&args, &resources))
+    if (!launch_children(&args, &resources, player_start_wfds))
     {
         fprintf(stderr, "Error: Child processes could not be launched.\n");
+        close_player_start_wfds(player_start_wfds, args.player_count);
         cleanup_game_resources(&resources, args.player_count);
         return EXIT_FAILURE;
     }
 
-    init_game(&args, &resources);
+    init_game(&args, &resources, player_start_wfds);
+    close_player_start_wfds(player_start_wfds, args.player_count);
 
     print_finish_status(&args, &resources);
 
