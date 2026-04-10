@@ -10,38 +10,12 @@
 #include "game_sync.h"
 #include "shmADT.h"
 
-static bool find_player_index_by_pid(const GameState *state, GameSync *sync,
-                                     pid_t pid, unsigned *out_index,
-                                     bool *out_finished_now)
-{
-    game_sync_reader_enter(sync);
-    unsigned player_count_snapshot = state->player_count;
-    if (player_count_snapshot > MAX_PLAYERS)
-        player_count_snapshot = MAX_PLAYERS;
-    for (unsigned i = 0; i < player_count_snapshot; i++)
-    {
-        if (state->players[i].pid == pid)
-        {
-            bool finished_snapshot = state->finished;
-            game_sync_reader_exit(sync);
-            if (out_index)
-                *out_index = i;
-            if (out_finished_now)
-                *out_finished_now = finished_snapshot;
-            return true;
-        }
-    }
-    bool finished_snapshot = state->finished;
-    game_sync_reader_exit(sync);
-    if (out_finished_now)
-        *out_finished_now = finished_snapshot;
-    return false;
-}
 
 typedef struct
 {
     unsigned long width;
     unsigned long height;
+    unsigned player_index;
 } PlayerArgs;
 
 typedef struct
@@ -57,7 +31,7 @@ static bool parse_args(int argc, char *argv[], PlayerArgs *args);
 
 static bool init_resources(const PlayerArgs *args, PlayerResources *out_res);
 
-static void run_player_loop(GameState *state, GameSync *sync);
+static void run_player_loop(GameState *state, GameSync *sync, unsigned me);
 
 static void cleanup_resources(PlayerResources *res);
 
@@ -74,7 +48,7 @@ int main(int argc, char *argv[]) {
     if(!init_resources(&args, &res))
         return 1;
 
-    run_player_loop(res.state, res.sync);
+    run_player_loop(res.state, res.sync, args.player_index);
 
     cleanup_resources(&res);
     return 0;
@@ -83,14 +57,15 @@ int main(int argc, char *argv[]) {
 
 static bool parse_args(int argc, char *argv[], PlayerArgs *out_args) {
 
-    if(argc != 3){
+    if(argc != 4){
         errno = EINVAL;
-        fprintf(stderr, "player: invalid usage. Usage: %s <width> <height>\n", argv[0]);
+        fprintf(stderr, "player: invalid usage. Usage: %s <width> <height> <index>\n", argv[0]);
         return false;
     }
 
     out_args->width = strtoul(argv[1], NULL, 10);
     out_args->height = strtoul(argv[2], NULL, 10);
+    out_args->player_index = (unsigned)atoi(argv[3]);
     if (out_args->width == 0 || out_args->height == 0)
     {
         errno = EINVAL;
@@ -128,22 +103,8 @@ static bool init_resources(const PlayerArgs *args, PlayerResources *out_res) {
     return true;
 }
 
-static void run_player_loop(GameState *state, GameSync *sync)
+static void run_player_loop(GameState *state, GameSync *sync, unsigned me)
 {
-    pid_t mypid = getpid();
-    unsigned me = 0;
-    bool finished_now = false;
-    //Tengo que primero encontrar que indice de player soy yo.
-    bool found = find_player_index_by_pid(state, sync, mypid, &me, &finished_now);
-    if (!found)
-    {
-        fprintf(stderr, "player: PID %d not registered in GameState\n", (int)mypid);
-        return;
-    }
-
-    if (finished_now)
-        return;
-
     static const int DX[8] = {0, 1, 1, 1, 0, -1, -1, -1};
     static const int DY[8] = {-1, -1, 0, 1, 1, 1, 0, -1};
 
@@ -160,6 +121,7 @@ static void run_player_loop(GameState *state, GameSync *sync)
         unsigned short x_snapshot = 0, y_snapshot = 0;
         unsigned neighbor_ok_mask = 0;
         int neighbor_vals[8] = {0};
+        bool finished_now = false;
 
         game_sync_reader_enter(sync);
         finished_now = state->finished;

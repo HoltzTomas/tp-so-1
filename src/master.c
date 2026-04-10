@@ -185,7 +185,9 @@ static bool launch_player(const MasterArgs *args, GameResources *res, int player
         }
         close(pipe_fds[W_END]);
 
-        char *argv[] = {args->player_paths[player_index], (char *)width_str, (char *)height_str, NULL};
+        char index_str[16];
+        snprintf(index_str, sizeof(index_str), "%d", player_index);
+        char *argv[] = {args->player_paths[player_index], (char *)width_str, (char *)height_str, index_str, NULL};
         execv(args->player_paths[player_index], argv);
         perror("execv player failed");
         exit(EXIT_FAILURE);
@@ -280,6 +282,9 @@ static void init_game_state(const MasterArgs *args, GameResources *res)
         p->y = (unsigned short)ty;
         state->board[BOARD_INDEX(state, p->x, p->y)] = (char)(-(i));
     }
+
+    for (int i = 0; i < args->player_count; i++)
+        sem_post(&res->sync->player_can_move[i]);
 }
 
 static void process_player_move(int player_idx, int pipe_fd, const MasterArgs *args, GameResources *res)
@@ -517,7 +522,7 @@ static bool init_game_resources(const MasterArgs *args, GameResources *res)
     sem_init(&res->sync->readers_count_mutex, 1, 1);
     res->sync->readers_count = 0;
     for (int i = 0; i < args->player_count; i++)
-        sem_init(&res->sync->player_can_move[i], 1, 1);
+        sem_init(&res->sync->player_can_move[i], 1, 0);
 
     size_t state_size = GAME_STATE_MAP_SIZE(args->width, args->height);
     res->state_shm = create_shm(GAME_STATE_SHM_NAME, state_size, O_RDWR | O_CREAT | O_EXCL, 0666, PROT_READ | PROT_WRITE);
