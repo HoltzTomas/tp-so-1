@@ -1,0 +1,5 @@
+*.o
+master
+player
+view
+.DS_Store

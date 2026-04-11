@@ -23,7 +23,7 @@ typedef struct
     unsigned char player_count;
     Player players[MAX_PLAYERS];
     bool finished;
-    char board[];
+    signed char board[];
 } GameState;
 
 #define GAME_STATE_MAP_SIZE(w, h) (sizeof(GameState) + (size_t)(w) * (size_t)(h))
